@@ -1,0 +1,16 @@
+{
+  "name": "Isang Tira: the daily Sungka puzzle",
+  "short_name": "Isang Tira",
+  "description": "One Sungka turn a day, the same board for everyone. Can you match par?",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f1e7d6",
+  "theme_color": "#b07a45",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
