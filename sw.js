@@ -1,11 +1,11 @@
 // Offline play: the game's own files are cached on install and served cache-first; the webfont is
 // cached the first time it loads. Bump VERSION whenever a file changes so players get the update.
-const VERSION = 'isangtira-v1';
+const VERSION = 'isangtira-v2';
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
   'style.css',
-  'src/app.mjs', 'src/daily.mjs', 'src/progress.mjs', 'src/engine.mjs', 'src/solver.mjs', 'src/prng.mjs', 'src/events.mjs', 'src/preview.mjs', 'src/timing.mjs', 'src/demos.mjs',
+  'src/app.mjs', 'src/match.mjs', 'src/daily.mjs', 'src/progress.mjs', 'src/engine.mjs', 'src/solver.mjs', 'src/prng.mjs', 'src/events.mjs', 'src/preview.mjs', 'src/timing.mjs', 'src/demos.mjs',
 ];
 
 self.addEventListener('install', (e) => {

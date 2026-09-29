@@ -1,10 +1,29 @@
 # Isang Tira
 
-A daily Sungka puzzle. One turn, one board a day, the same for everyone. Bank as many shells in your ulo as the solver's best (**par**), in three tries.
+Sungka, the Filipino shell game, against **Lola Iska**. You and Lola take turns, round after round, on the traditional board with seven shells in every house. There is also a **daily one-turn puzzle**: one board a day, the same for everyone.
 
 **Play:** https://isang-tira.vercel.app
 
-## How it plays
+## Laban kay Lola (the game)
+
+- You start. Pick one of your houses (the bottom row) and sow its shells one per slot, into your ulo and on along Lola's row. Lola sows the same way from her side.
+- The rules:
+  - Last shell in your own ulo: another turn.
+  - Last shell on shells: scoop them up and keep sowing.
+  - Last shell in your own empty house: capture the house opposite.
+  - Last shell in one of Lola's empty houses: her turn.
+- **Rounds:** when one side runs out, the other player keeps what is left on theirs, and the round ends. Next round, each player fills their houses with seven from their ulo. Houses they can't fill are **sunog** (burnt) and skipped for the round.
+- **How long a game lasts:** 1 round, 3 rounds (the default), or **hanggang maubos**, the traditional game that goes on until someone can't fill a single house. The winner is whoever holds more shells at the end.
+- **How Lola plays.** She decides one sowing at a time with a short look-ahead, the way a person does:
+  - **Madali:** one sowing ahead, and she sometimes slips.
+  - **Katamtaman:** two sowings ahead.
+  - **Mahirap:** three sowings ahead, and she weighs your best reply.
+  - She deliberately doesn't search a whole turn to its end. From the opening board, one turn can chain extra turns and relays to 95 of the 98 shells, so a perfect searcher would end the game at once.
+- Your game is saved as you play, and your record against each level is kept. *Bilis* sets the animation speed.
+
+## The daily puzzle
+
+### How it plays
 
 - You get a new board every day at midnight Manila time, puzzle #1 being 2026-09-28.
 - Tap a house to see where its **first handful** lands; tap again to sow. If the handful lands on shells, it relays, and counting the rest is up to you. That's the puzzle.
@@ -13,7 +32,7 @@ A daily Sungka puzzle. One turn, one board a day, the same for everyone. Bank as
 - **Nakaraan** lets you play any past day for practice. **Stats** tracks your streak, par rate, and which try you reached par on. Only daily games count.
 - It works offline and installs to the home screen.
 
-### The week
+#### The week
 
 | Day | Tier | What it asks |
 | --- | --- | --- |
@@ -42,6 +61,7 @@ python3 -m http.server 8000
 
 Tests (Node 20+): `node --test test/*.test.mjs`. They cover:
 - the rules engine and solver
+- the game against Lola: turns, captures into the right ulo, rounds and burnt houses, and whole games where no shell is lost and the animation always matches the board. They also check that a round takes many turns, and that Lola's levels really do get harder.
 - a year of daily boards: each passes its gates, and an independent brute-force solver agrees on par and perfect lines
 - progress, streaks and share text
 - the offline cache list
@@ -49,6 +69,7 @@ Tests (Node 20+): `node --test test/*.test.mjs`. They cover:
 ## Files
 
 - `src/engine.mjs`, `src/solver.mjs`, `src/reference.mjs`: the rules, the exact solver, and an independent reference implementation.
+- `src/match.mjs`: the whole game against Lola: turns for both sides (Lola's sowings run the same engine on the mirrored board), rounds, burnt houses, and how Lola chooses.
 - `src/daily.mjs`: dates, profiles, gates and the daily board.
 - `src/progress.mjs`: tries, Lola's whisper, stats, streaks and share text.
 - `src/app.mjs`: the page, board, animation and sound.

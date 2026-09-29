@@ -1,6 +1,8 @@
-// Isang Tira: the daily Sungka puzzle. Screens, board, animation, sound and storage. Rules come from
-// engine.mjs; the animation only plays sowEvents(), so the screen can never disagree with the rules.
-import { ULO, isBurnt, legalHouses, distanceToUlo, makeBoard } from './engine.mjs';
+// Isang Tira: Sungka against Lola Iska, and the daily one-turn puzzle. Screens, board, animation,
+// sound and storage. Rules come from engine.mjs (and match.mjs for the whole game); the animation
+// only plays the rules' own events, so the screen can never disagree with the rules.
+import { ULO, LOLA_ULO, isBurnt, legalHouses, distanceToUlo, makeBoard } from './engine.mjs';
+import { newMatch, play as playSowing, nextRound, legal as legalFor, lolaMove, LEVELS } from './match.mjs';
 import { sowEvents, turnEndEvents, applyEvent } from './events.mjs';
 import { firstHandful, firstHandfulText, wholeSowing, wholeSowingText, slotName } from './preview.mjs';
 import { stepMs } from './timing.mjs';
@@ -66,12 +68,12 @@ const sound = (() => {
 })();
 
 // ---------- the board ----------
-function boardHtml(id) {
+function boardHtml(id, match = false) {
   const inner = (i) => `<span class="shells" aria-hidden="true"></span><span class="num"></span><span class="lbl" aria-hidden="true">${slotName(i)}</span>`;
   const mine = (i) => `<button type="button" class="h mine" data-slot="${i}">${inner(i)}</button>`;
   const theirs = (i) => `<div class="h" role="img" data-slot="${i}">${inner(i)}</div>`;
-  return `<div class="board" id="${id}">
-  <div class="lola-ulo" aria-hidden="true"><span>ulo ni Lola</span></div>
+  return `<div class="board${match ? ' match' : ''}" id="${id}">
+  ${match ? `<div class="lola-ulo counted" role="img" data-slot="${LOLA_ULO}"><span class="ulo-l">ulo ni Lola</span><span class="num"></span></div>` : '<div class="lola-ulo" aria-hidden="true"><span>ulo ni Lola</span></div>'}
   <div class="rows"><div class="row lola">${TOP.map(theirs).join('')}</div><div class="row you">${BOTTOM.map(mine).join('')}</div></div>
   <div class="ulo" role="img" data-slot="${ULO}"><span class="ulo-l">ulo mo</span><span class="num"></span></div>
   <div class="fx" aria-hidden="true"></div>
@@ -81,7 +83,8 @@ function boardHtml(id) {
 function paint(ctx, legal = []) {
   ctx.$b.querySelectorAll('[data-slot]').forEach(($h) => {
     const i = Number($h.dataset.slot), n = ctx.s[i];
-    if (i === ULO) { $h.querySelector('.num').textContent = String(n); $h.setAttribute('aria-label', `Your ulo: ${n} banked this turn`); return; }
+    if (i === ULO) { $h.querySelector('.num').textContent = String(n); $h.setAttribute('aria-label', ctx.match ? `Your ulo: ${n} shells` : `Your ulo: ${n} banked this turn`); return; }
+    if (i === LOLA_ULO) { $h.querySelector('.num').textContent = String(n); $h.setAttribute('aria-label', `Lola's ulo: ${n} shells`); return; }
     const burnt = isBurnt(ctx.burnt, i);
     $h.classList.toggle('burnt', burnt);
     $h.querySelector('.num').textContent = burnt ? '✕' : String(n);
@@ -90,6 +93,7 @@ function paint(ctx, legal = []) {
     $h.setAttribute('aria-label', `${i < 7 ? 'Your house' : "Lola's house"} ${slotName(i)}, ${burnt ? 'burnt' : `${n} shell${n === 1 ? '' : 's'}`}${d ? `, ${d} from your ulo` : ''}`);
     if (i < 7) { const ok = legal.includes(i); $h.setAttribute('aria-disabled', String(!ok)); $h.tabIndex = ok ? 0 : -1; }
   });
+  if (ctx.match) { const sc = document.getElementById('score'); if (sc) { sc.innerHTML = `<span><b>${ctx.s[ULO]}</b>ikaw</span><i>vs</i><span><b>${ctx.s[LOLA_ULO]}</b>Lola</span>`; sc.setAttribute('aria-label', `You ${ctx.s[ULO]}, Lola ${ctx.s[LOLA_ULO]}`); } }
 }
 
 function center(ctx, slot) {
@@ -126,7 +130,7 @@ let active = null; // the ctx currently animating, so a tap can speed it up
 async function animate(ctx, events) {
   const fast = reduced();
   let hand = null, pos = null, inHand = 0, drops = 0;
-  ctx.speed = 1; active = ctx;
+  ctx.speed = ctx.base || 1; active = ctx;
   const ms = (e) => stepMs(e, drops) / ctx.speed;
   const dropHand = () => { if (hand) { hand.remove(); hand = null; } };
   for (const e of events) {
@@ -158,8 +162,8 @@ async function animate(ctx, events) {
       case 'extra': {
         dropHand();
         if (!ctx.quiet) sound.extra();
-        const [ux, uc] = center(ctx, ULO);
-        const uy = uc - 0.3 * ctx.$b.querySelector('.ulo').getBoundingClientRect().height;
+        const [ux, uc] = center(ctx, e.slot);
+        const uy = uc - 0.3 * ctx.$b.querySelector(`[data-slot="${e.slot}"]`).getBoundingClientRect().height;
         const st = fxEl(ctx, 'stamp', 'ISA PA!', [ux, uy]);
         const pose = (k) => `translate(${ux}px, ${uy}px) rotate(-8deg) scale(${k})`;
         st.style.transform = pose(1);
@@ -170,13 +174,14 @@ async function animate(ctx, events) {
       case 'capture': case 'sweep': {
         dropHand();
         if (!ctx.quiet) sound.capture();
-        const from = e.t === 'capture' ? e.opp : 3;
-        (e.t === 'capture' ? [e.opp, e.slot] : BOTTOM).forEach((i) => ctx.$b.querySelector(`[data-slot="${i}"]`).classList.add('taken'));
+        const to = e.ulo ?? ULO, lolas = e.side === 'lola';
+        const from = e.t === 'capture' ? e.opp : lolas ? 11 : 3;
+        (e.t === 'capture' ? [e.opp, e.slot] : lolas ? TOP : BOTTOM).forEach((i) => ctx.$b.querySelector(`[data-slot="${i}"]`).classList.add('taken'));
         const chip = newHand(ctx, 'hand take', e.n, center(ctx, from));
-        await move(chip, center(ctx, from), center(ctx, ULO), ms(e), 30);
+        await move(chip, center(ctx, from), center(ctx, to), ms(e), 30);
         chip.remove();
         ctx.$b.querySelectorAll('.taken').forEach((el) => el.classList.remove('taken'));
-        applyEvent(ctx.s, e); paint(ctx); flash(ctx, ULO, PULSE, 200);
+        applyEvent(ctx.s, e); paint(ctx); flash(ctx, to, PULSE, 200);
         break;
       }
       case 'dud': dropHand(); if (!ctx.quiet) sound.dud(); await flash(ctx, e.slot, SHAKE, ms(e)); break;
@@ -200,7 +205,8 @@ const toState = (p) => ({ s: Uint8Array.from(p.board), burnt: p.burnt });
 const lolaSays = (text) => { const el = $('#lola-line'); if (el) { el.textContent = text; el.parentElement.classList.remove('talk'); void el.offsetWidth; el.parentElement.classList.add('talk'); } };
 
 function open(iso) {
-  run++;
+  run++; mrun++; mui = null;
+  prefs.mode = 'daily'; savePrefs();
   puzzle = puzzleFor(iso);
   const daily = iso === today();
   rec = data.records[iso] || newRecord(puzzle, daily);
@@ -234,7 +240,7 @@ function marks() {
 }
 
 function render() {
-  $app.innerHTML = `${header()}
+  $app.innerHTML = `${modeTabs('daily')}${header()}
   <div class="lola"><div class="lola-face" aria-hidden="true">👵</div><p class="lola-bubble"><span id="lola-line"></span></p></div>
   <div class="meta">${marks()}<span class="spacer"></span><span id="mode" class="badge${rec.whisper ? ' ws' : ''}">${rec.whisper ? 'Bulong ni Lola: buong sowing' : 'Preview: unang dakot'}</span></div>
   ${boardHtml('b')}
@@ -305,11 +311,11 @@ async function playMove(h) {
   $('.marks').outerHTML = marks();
 }
 
-function celebrate() {
-  if (reduced() || !ui) return;
-  const at = center(ui, ULO);
+function celebrate(ctx = ui) {
+  if (reduced() || !ctx) return;
+  const at = center(ctx, ULO);
   for (let k = 0; k < 18; k++) {
-    const el = fxEl(ui, 'spark', '', at), a = (k / 18) * Math.PI * 2, r = 50 + (k % 3) * 18;
+    const el = fxEl(ctx, 'spark', '', at), a = (k / 18) * Math.PI * 2, r = 50 + (k % 3) * 18;
     el.animate([{ transform: `translate(${at[0]}px, ${at[1]}px)`, opacity: 1 }, { transform: `translate(${at[0] + Math.cos(a) * r}px, ${at[1] + Math.sin(a) * r}px) rotate(${k * 40}deg)`, opacity: 0 }], { duration: 900, easing: 'ease-out' }).finished.then(() => el.remove());
   }
 }
@@ -443,11 +449,257 @@ function archive() {
   dialog(`<h2>Mga nakaraang laro</h2><p class="fine">Play any past day for practice. The newest is at the top.</p><div class="days">${items.join('')}</div>`, 'wide');
 }
 
+
+// ---------- the game against Lola ----------
+const MKEY = 'isangtira.match.v1';
+const LEVEL_NAME = { madali: 'Madali', katamtaman: 'Katamtaman', mahirap: 'Mahirap' };
+const LEVEL_NOTE = {
+  madali: 'Madali: relaks lang si Lola, at minsan nagkakamali.',
+  katamtaman: 'Katamtaman: bumibilang si Lola ng dalawang tira pauna.',
+  mahirap: 'Mahirap: iniisip din ni Lola ang isasagot mo.',
+};
+const ROUNDS = [1, 3, null];
+const roundsName = (r) => (r ? `${r} round` : 'Hanggang maubos');
+const SPEEDS = [1, 2, 3];
+const mstore = {
+  get() { if (TEST) return null; try { return JSON.parse(localStorage.getItem(MKEY)); } catch { return null; } },
+  set(v) { if (TEST) return; try { localStorage.setItem(MKEY, JSON.stringify(v)); } catch { /* storage unavailable: keep playing */ } },
+};
+const prefs = (() => {
+  const p = mstore.get() || {};
+  return {
+    mode: p.mode === 'daily' ? 'daily' : 'match',
+    level: LEVELS.includes(p.level) ? p.level : 'madali',
+    rounds: ROUNDS.includes(p.rounds) ? p.rounds : 3,
+    speed: SPEEDS.includes(p.speed) ? p.speed : 2,
+    record: p.record && typeof p.record === 'object' ? p.record : {},
+    seenRules: !!p.seenRules,
+    saved: p.saved || null,
+  };
+})();
+const savePrefs = () => mstore.set(prefs);
+
+const LOLA_M = {
+  hello: ['Tara, apo, maglaro tayo ng sungka! Ikaw ang mauna.', 'Upo ka, apo. Sige, ikaw muna.', 'O, apo, sungka tayo? Pagbibigyan kita... ngayon lang!'],
+  yourTurn: ['Ikaw na, apo.', 'Sige, ikaw naman.', 'O, ikaw na.'],
+  youExtra: ['Isa pa! Sige, apo.', 'Ayan! Isa pang tira.', 'Tama ang bilang mo, apo.'],
+  youCapture: ['Aba! Kinuha mo ang mga sigay ko!', 'Hmp, galing mo, apo.', 'Aray ko! Ang dami mong nakuha.'],
+  think: ['Hmm...', 'Teka, bibilangin ko...', 'Saan kaya...', 'Ito kaya?'],
+  herExtra: ['Isa pa si Lola!', 'Hehe, isa pa ako.', 'Sakto! Isa pa.'],
+  herCapture: ["Akin na 'yan, apo!", 'Salamat sa sigay, apo!', 'Hehe, huli ka!'],
+  roundWon: ["Ang galing mo, apo! Panalo ka sa round na 'to."],
+  roundLost: ["Hehe, akin ang round na 'to. Bawi ka!"],
+  roundTie: ['Tabla! Parehas tayo.'],
+  won: ["Panalo ka, apo! Proud si Lola sa 'yo.", 'Ikaw na ang bagong kampeon ng sungka!'],
+  lost: ['Panalo si Lola! Pero ang galing mo rin, apo. Isa pa?', 'Hindi bale, apo. Isa pa tayo?'],
+  tie: ['Tabla! Ang galing natin pareho.'],
+};
+const sayM = (k) => LOLA_M[k][Math.floor(Math.random() * LOLA_M[k].length)];
+
+let match = null, mui = null, mrun = 0;
+const packMatch = (m) => ({ ...m, s: Array.from(m.s) });
+function unpackMatch(p) {
+  if (!p || !Array.isArray(p.s) || p.s.length !== 16 || !LEVELS.includes(p.level) || !['you', 'lola'].includes(p.turn) || !['play', 'roundOver'].includes(p.phase)) return null;
+  return { ...p, s: Uint8Array.from(p.s), rounds: Array.isArray(p.rounds) ? p.rounds : [] };
+}
+const saveMatch = () => { prefs.saved = match && match.phase !== 'over' ? packMatch(match) : null; savePrefs(); };
+const freshMatch = () => Object.assign(newMatch({ rounds: prefs.rounds }), { level: prefs.level });
+const modeTabs = (now) => `<nav class="modes-tab" aria-label="Laro"><button type="button" data-act="mode-match" aria-pressed="${now === 'match'}">🐚 Laban kay Lola</button><button type="button" data-act="mode-daily" aria-pressed="${now === 'daily'}">📅 Isang Tira ng Araw</button></nav>`;
+const yourMove = () => !!mui && !mui.busy && match.phase === 'play' && match.turn === 'you';
+
+function openMatch(fresh = false) {
+  run++; mrun++;
+  prefs.mode = 'match';
+  puzzle = null; ui = null;
+  if (fresh || !match) match = (!fresh && unpackMatch(prefs.saved)) || freshMatch();
+  saveMatch();
+  mui = { s: Uint8Array.from(match.s), burnt: match.burnt, busy: false, selected: null, $b: null, lola: false, match: true, base: prefs.speed };
+  renderMatch();
+  if (match.phase === 'roundOver') { roundOver(); return; }
+  if (match.turn === 'lola') { lolaTurn(); return; }
+  lolaSays(match.round === 1 && !match.rounds.length && match.s[ULO] === 0 ? sayM('hello') : sayM('yourTurn'));
+  if (!prefs.seenRules && !TEST) matchHelp();
+}
+
+function renderMatch() {
+  const m = match;
+  $app.innerHTML = `${modeTabs('match')}
+  <header class="top">
+    <div><div class="kicker">Laban kay Lola Iska · ${esc(LEVEL_NAME[m.level])} · Round ${m.round}${m.limit ? ` of ${m.limit}` : ''}</div><h1>Sungka</h1></div>
+    <div class="score" role="img" id="score"></div>
+  </header>
+  <nav class="tools" aria-label="Menu">
+    <button type="button" class="small" data-act="m-help">Paano laruin</button>
+    <button type="button" class="small" data-act="m-new">Bagong laro</button>
+    <button type="button" class="small" data-act="speed" aria-label="Animation speed">Bilis ${prefs.speed}×</button>
+    <button type="button" class="small" data-act="mute" aria-label="Sound">${data.muted ? '🔇' : '🔊'}</button>
+  </nav>
+  <div class="lola"><div class="lola-face" aria-hidden="true">👵</div><p class="lola-bubble"><span id="lola-line"></span></p></div>
+  <p class="turn" id="turn" aria-live="polite"></p>
+  ${boardHtml('b', true)}
+  <p class="caption" id="caption"></p>
+  <div class="panel" id="panel"></div>
+  <p class="hint">Tap one of your houses (the bottom row) to see where its first handful lands, then tap again to sow. Tap during a sowing to speed it up. Keys 1–7 pick Y0–Y6.</p>`;
+  mui.$b = $('#b');
+  refreshMatch();
+}
+
+function refreshMatch() {
+  if (!mui || !mui.$b) return;
+  const mine = yourMove() ? legalFor(match, 'you') : [];
+  paint(mui, mine);
+  mui.$b.querySelectorAll('.h.mine').forEach(($h) => $h.classList.toggle('sel', Number($h.dataset.slot) === mui.selected));
+  const playing = match.phase === 'play';
+  mui.$b.classList.toggle('lola-turn', playing && match.turn === 'lola');
+  mui.$b.classList.toggle('your-turn', playing && match.turn === 'you');
+  $('#turn').textContent = !playing ? '' : match.turn === 'lola' ? 'Si Lola ang tumitira...' : mui.busy ? 'Sinasabog mo ang sigay...' : 'Ikaw na: pumili ng bahay sa ibaba.';
+  if (playing && match.turn === 'you') $('#panel').innerHTML = `<button type="button" class="primary" data-act="m-sow"${mui.selected === null || mui.busy ? ' disabled' : ''}>${mui.selected === null ? 'Pumili ng bahay' : `Sow ${slotName(mui.selected)}`}</button>`;
+  else if (playing) $('#panel').innerHTML = '';
+}
+
+function matchSelect(h) {
+  if (!yourMove()) return undefined;
+  if (!legalFor(match, 'you').includes(h)) { caption(isBurnt(match.burnt, h) ? `${slotName(h)} is sunog this round.` : `${slotName(h)} is empty.`); return undefined; }
+  sound.ensure();
+  if (mui.selected === h) return matchSow(h);
+  mui.selected = h;
+  const f = firstHandful(mui.s, mui.burnt, h);
+  showRings(mui, [f.lands], false);
+  caption(`${slotName(h)} (${mui.s[h]}): ${firstHandfulText(f)}`);
+  announce($('#caption').textContent);
+  refreshMatch();
+  return undefined;
+}
+
+async function matchSow(h) {
+  const me = mrun;
+  mui.busy = true; clearRings(mui); mui.selected = null; caption(''); refreshMatch();
+  const r = playSowing(match, h);
+  saveMatch();
+  if (!(await animate(mui, r.events)) || me !== mrun) return;
+  mui.s = Uint8Array.from(match.s);
+  mui.busy = false;
+  if (r.result.outcome === 'capture') lolaSays(sayM('youCapture'));
+  if (r.roundOver) { roundOver(); return; }
+  if (r.again) { if (r.result.outcome !== 'capture') lolaSays(sayM('youExtra')); caption('Isa pa! Pumili ulit.'); refreshMatch(); mui.$b.querySelector(`[data-slot="${legalFor(match, 'you')[0]}"]`)?.focus({ preventScroll: true }); return; }
+  refreshMatch();
+  await lolaTurn();
+}
+
+// Lola's turn: she looks, points, and sows, again and again while she earns extra turns.
+async function lolaTurn() {
+  const me = mrun;
+  let took = false;
+  while (me === mrun && match.phase === 'play' && match.turn === 'lola') {
+    mui.busy = true; refreshMatch();
+    lolaSays(sayM('think'));
+    await wait(reduced() ? 0 : 350 + 700 / prefs.speed);
+    if (me !== mrun) return;
+    const h = lolaMove(match, match.level);
+    const $h = mui.$b.querySelector(`[data-slot="${h + 8}"]`);
+    $h.classList.add('sel');
+    caption(`Si Lola: ${slotName(h + 8)} (${mui.s[h + 8]})`);
+    await wait(reduced() ? 0 : 600 / prefs.speed);
+    $h.classList.remove('sel');
+    if (me !== mrun) return;
+    const r = playSowing(match, h);
+    saveMatch();
+    mui.lola = true;
+    const ok = await animate(mui, r.events);
+    mui.lola = false;
+    if (!ok || me !== mrun) return;
+    mui.s = Uint8Array.from(match.s);
+    took = r.result.outcome === 'capture';
+    if (took) lolaSays(sayM('herCapture'));
+    if (r.roundOver) { mui.busy = false; roundOver(); return; }
+    if (r.again) { if (!took) lolaSays(sayM('herExtra')); await wait(reduced() ? 0 : 450 / prefs.speed); }
+  }
+  if (me !== mrun) return;
+  mui.busy = false;
+  caption('');
+  if (!took) lolaSays(sayM('yourTurn'));
+  refreshMatch();
+  mui.$b.querySelector(`[data-slot="${legalFor(match, 'you')[0]}"]`)?.focus({ preventScroll: true });
+}
+
+function roundOver() {
+  refreshMatch();
+  caption('');
+  if (match.phase === 'over') { matchOver(); return; }
+  const last = match.rounds[match.rounds.length - 1];
+  lolaSays(last.winner === 'you' ? sayM('roundWon') : last.winner === 'lola' ? sayM('roundLost') : sayM('roundTie'));
+  const n = nextRound(match);
+  const burnt = (base) => [0, 1, 2, 3, 4, 5, 6].filter((h) => isBurnt(n.burnt, base + h)).length;
+  const yb = burnt(0), lb = burnt(8);
+  const note = `Sa susunod na round: ${yb ? `${yb} bahay mo ang sunog` : 'puno lahat ng bahay mo'}, at ${lb ? `${lb} kay Lola ang sunog` : 'puno lahat kay Lola'}. ${n.turn === 'you' ? 'Ikaw ang mauuna.' : 'Si Lola ang mauuna.'}`;
+  $('#turn').textContent = '';
+  $('#panel').innerHTML = `<div class="done">
+    <p class="result ${last.winner === 'you' ? 'yes' : 'no'}">Round ${last.round}: ikaw <b>${last.you}</b> · Lola <b>${last.lola}</b></p>
+    <p class="fine">${esc(note)}</p>
+    <div class="btns"><button type="button" class="primary" data-act="m-next">Susunod na round ▶</button><button type="button" data-act="m-new">Bagong laro</button></div>
+  </div>`;
+  $('#panel [data-act="m-next"]').focus({ preventScroll: true });
+}
+
+function matchOver() {
+  const w = match.winner;
+  const rec = prefs.record[match.level] || { w: 0, l: 0, d: 0 };
+  if (!match.recorded) { rec[w === 'you' ? 'w' : w === 'lola' ? 'l' : 'd']++; prefs.record[match.level] = rec; match.recorded = true; }
+  saveMatch();
+  if (w === 'you') { sound.par(); celebrate(mui); }
+  lolaSays(w === 'you' ? sayM('won') : w === 'lola' ? sayM('lost') : sayM('tie'));
+  const rows = match.rounds.map((r) => `<li>Round ${r.round}: ikaw ${r.you} · Lola ${r.lola}</li>`).join('');
+  const how = match.limit ? '' : '<p class="fine">Hindi na makapuno ng kahit isang bahay ang natalo.</p>';
+  $('#turn').textContent = '';
+  $('#panel').innerHTML = `<div class="done">
+    <p class="result ${w === 'you' ? 'yes' : 'no'}"><b>${w === 'you' ? 'Panalo ka!' : w === 'lola' ? 'Panalo si Lola!' : 'Tabla!'}</b></p>
+    <ul class="rounds">${rows}</ul>${how}
+    <p class="streak">Laban kay Lola (${esc(LEVEL_NAME[match.level])}): <b>${rec.w}</b> panalo · ${rec.l} talo${rec.d ? ` · ${rec.d} tabla` : ''}</p>
+    <div class="btns"><button type="button" class="primary" data-act="m-again">Isa pa! · Play again</button><button type="button" data-act="m-new">Palitan ang antas</button></div>
+  </div>`;
+  $('#panel [data-act="m-again"]').focus({ preventScroll: true });
+}
+
+function nextOne() {
+  if (!match || match.phase !== 'roundOver') return;
+  match = nextRound(match);
+  saveMatch();
+  openMatch();
+}
+
+function newGameDialog() {
+  const d = dialog(`<h2>Bagong laro</h2>
+    <h3>Antas ni Lola</h3><div class="btns choose">${LEVELS.map((l) => `<button type="button" data-act="pick-level" data-v="${l}" aria-pressed="${l === prefs.level}">${LEVEL_NAME[l]}</button>`).join('')}</div>
+    <p class="fine" id="level-note">${esc(LEVEL_NOTE[prefs.level])}</p>
+    <h3>Haba ng laro</h3><div class="btns choose">${ROUNDS.map((r) => `<button type="button" data-act="pick-rounds" data-v="${r ?? 0}" aria-pressed="${r === prefs.rounds}">${roundsName(r)}</button>`).join('')}</div>
+    <p class="fine">Hanggang maubos is the traditional game: round after round, until someone cannot fill a single house.</p>
+    ${Object.keys(prefs.record).length ? `<p class="fine">${LEVELS.filter((l) => prefs.record[l]).map((l) => `${LEVEL_NAME[l]}: ${prefs.record[l].w} panalo, ${prefs.record[l].l} talo`).join(' · ')}</p>` : ''}`);
+  d.lastElementChild.innerHTML = '<button type="button" class="primary" data-act="m-start">Simulan · Start</button><button type="button" data-act="close">Hindi muna</button>';
+}
+
+function matchHelp() {
+  prefs.seenRules = true; savePrefs();
+  const d = dialog(`<h2>Paano laruin ang Sungka</h2>
+  <p>You and Lola take turns. Each of you has seven houses and an ulo; every house starts with 7 sigay. Bank more in your ulo than Lola.</p>
+  <ol class="rules">
+    <li>Pick a house in <b>your row</b> (bottom). Its shells go one per slot: along your row, into <b>your ulo</b>, then along Lola's row. Her ulo is skipped. Lola sows the same way from her side.</li>
+    <li>Last shell in <b>your ulo</b>: <b>isa pa!</b> Choose again.</li>
+    <li>Last shell in a house that <b>has shells</b>: scoop them all up and keep sowing.</li>
+    <li>Last shell in <b>your own empty house</b>: capture Lola's house opposite, plus that shell. Nothing opposite? Your turn just ends.</li>
+    <li>Last shell in an <b>empty house of Lola's</b>: your turn ends, and it's hers.</li>
+    <li>When a side has no shells left, the other player keeps what is on theirs and the <b>round ends</b>. More in your ulo wins the round.</li>
+    <li>Next round, each fills their houses with 7 from their ulo. Houses you cannot fill are <b>sunog</b> (burnt) and skipped for the round.</li>
+  </ol>
+  <figure class="demo"><div aria-hidden="true">${boardHtml('demo')}</div><figcaption id="demo-cap"></figcaption></figure>
+  <p class="fine">Tapping a house shows where its first handful lands. If it lands on shells, the sowing keeps going: counting ahead is the skill.</p>`, 'wide');
+  runDemo(d);
+}
+
 // ---------- input ----------
 document.addEventListener('click', (ev) => {
   const t = ev.target.closest('button');
   if (!t) return;
-  if (t.matches('#b .h.mine')) { select(Number(t.dataset.slot)); return; }
+  if (t.matches('#b .h.mine')) { if (mui && !ui) matchSelect(Number(t.dataset.slot)); else select(Number(t.dataset.slot)); return; }
   switch (t.dataset.act) {
     case 'sow': if (ui.selected !== null) select(ui.selected); break;
     case 'again': again(); break;
@@ -460,6 +712,17 @@ document.addEventListener('click', (ev) => {
     case 'mute': data.muted = !data.muted; save(); t.textContent = data.muted ? '🔇' : '🔊'; break;
     case 'close': run++; $('#dlg').close(); break;
     case 'play-day': $('#dlg').close(); open(t.dataset.iso); break;
+    case 'mode-match': if (!mui) openMatch(); break;
+    case 'mode-daily': if (!ui) open(today()); break;
+    case 'm-sow': if (mui && mui.selected !== null) matchSelect(mui.selected); break;
+    case 'm-help': matchHelp(); break;
+    case 'm-new': newGameDialog(); break;
+    case 'm-again': match = freshMatch(); openMatch(); break;
+    case 'm-next': nextOne(); break;
+    case 'm-start': run++; $('#dlg').close(); match = freshMatch(); openMatch(); break;
+    case 'pick-level': prefs.level = t.dataset.v; savePrefs(); t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); $('#level-note').textContent = LEVEL_NOTE[prefs.level]; break;
+    case 'pick-rounds': prefs.rounds = Number(t.dataset.v) || null; savePrefs(); t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); break;
+    case 'speed': prefs.speed = SPEEDS[(SPEEDS.indexOf(prefs.speed) + 1) % SPEEDS.length]; savePrefs(); if (mui) mui.base = prefs.speed; t.textContent = `Bilis ${prefs.speed}×`; break;
     default: break;
   }
 });
@@ -469,10 +732,11 @@ document.addEventListener('keydown', (ev) => {
   if (active && (ev.key === ' ' || ev.key === 'Enter')) active.speed = 4;
   if (ev.ctrlKey || ev.metaKey || ev.altKey || $('#dlg').open) return;
   if (/^[1-7]$/.test(ev.key) && ui && !ui.busy && !rec.done) { ev.preventDefault(); const h = Number(ev.key) - 1; ui.$b.querySelector(`[data-slot="${h}"]`).focus({ preventScroll: true }); select(h); }
+  else if (/^[1-7]$/.test(ev.key) && !ui && yourMove()) { ev.preventDefault(); const h = Number(ev.key) - 1; mui.$b.querySelector(`[data-slot="${h}"]`).focus({ preventScroll: true }); matchSelect(h); }
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && puzzle && rec.daily && puzzle.iso !== today() && !ui.busy) open(today()); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && puzzle && ui && rec.daily && puzzle.iso !== today() && !ui.busy) open(today()); });
 
-open(today());
+if (TEST ? Q.get('mode') === 'daily' : prefs.mode === 'daily') open(today()); else openMatch();
 if ('serviceWorker' in navigator && !TEST) navigator.serviceWorker.register('sw.js').catch(() => { /* online-only then */ });
 
 if (TEST) {
@@ -481,5 +745,8 @@ if (TEST) {
     get puzzle() { return puzzle; }, get rec() { return rec; }, get ui() { return ui; },
     async play(moves) { for (const h of moves) { select(h); await select(h); } },
     again, replay, open,
+    get match() { return match; }, get mui() { return mui; }, openMatch,
+    async sow(h) { matchSelect(h); await matchSow(h); },
   };
+  if (Q.get('level')) prefs.level = Q.get('level');
 }
