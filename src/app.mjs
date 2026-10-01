@@ -9,6 +9,7 @@ import { stepMs } from './timing.mjs';
 import { DEMOS } from './demos.mjs';
 import { puzzleFor, manilaDate, addDays, msToNextPuzzle, EPOCH, TIERS, DAYS, weekday, puzzleNumber } from './daily.mjs';
 import { newRecord, recordTry, useWhisper, stats, shareText, tryMark, MAX_TRIES, migrate } from './progress.mjs';
+import { createAudio } from './audio.mjs';
 
 const Q = new URLSearchParams(location.search);
 const TEST = Q.get('test') === '1';
@@ -24,6 +25,18 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const reduced = () => (TEST && Q.get('motion') !== '1') || matchMedia('(prefers-reduced-motion: reduce)').matches;
+const instant = () => TEST && Q.get('motion') !== '1'; // the 3D board still moves its shells for reduced motion, just calmly
+const calm = () => !!(prefs && prefs.opt.calm) || matchMedia('(prefers-reduced-motion: reduce)').matches;
+let view3d = null; // the 3D sala (view3d.mjs) once it is up; without it, the page's own board plays
+let boardSync = Promise.resolve();
+const main3d = (ctx) => !!view3d && !!ctx && !!ctx.$b && ctx.$b.id === 'b';
+// put the 3D board into the state the page holds, shells flying where they must
+function sync3d(ctx, animate = !instant()) {
+  if (!main3d(ctx)) return boardSync;
+  const s = Uint8Array.from(ctx.s), b = ctx.burnt;
+  boardSync = boardSync.then(() => view3d.setBoard(s, b, { animate: animate && !document.hidden, speed: calm() ? 1.5 : 1 })).catch(() => {});
+  return boardSync;
+}
 
 // Lola Iska's lines. She is warm, a little teasing, and never gives the answer away.
 const LOLA = {
@@ -46,26 +59,16 @@ let data = migrate(store.get());
 const save = () => store.set(data);
 
 // ---------- sound ----------
-const sound = (() => {
-  let ctx = null;
-  function tone(freq, dur, type = 'triangle', gain = 0.08, when = 0) {
-    if (!ctx || data.muted) return;
-    const t = ctx.currentTime + when, o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = type; o.frequency.setValueAtTime(freq, t);
-    g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g).connect(ctx.destination); o.start(t); o.stop(t + dur + 0.02);
-  }
-  // a shell clicking into a wooden hole: a short knock plus a higher tick
-  const click = (slot) => { tone(slot === ULO ? 170 : 380 + (slot % 8) * 32, 0.06, 'triangle', 0.07); tone(1900 + (slot % 5) * 90, 0.02, 'square', 0.015); };
-  return {
-    ensure() { if (TEST) return; try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)(); if (ctx.state === 'suspended') ctx.resume(); } catch { ctx = null; } },
-    drop: click,
-    extra() { [659.25, 880].forEach((f, i) => tone(f, 0.25, 'sine', 0.06, i * 0.07)); },
-    capture() { [392, 523.25, 659.25].forEach((f, i) => tone(f, 0.3, 'triangle', 0.07, i * 0.06)); },
-    dud() { tone(196, 0.3, 'sine', 0.06); },
-    par() { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, 0.6, 'sine', 0.06, i * 0.1)); },
-  };
-})();
+const audio = createAudio();
+audio.setMuted(!!data.muted);
+const sound = {
+  ensure() { if (!TEST) { audio.start(); audio.setMusic(true); } },
+  drop(slot) { audio.event('land', { slot, empty: false }); },
+  extra() { audio.event('extra'); },
+  capture() { audio.event('capture', { n: 3 }); },
+  dud() { audio.event('dud'); },
+  par() { audio.event('par'); },
+};
 
 // ---------- the board ----------
 function boardHtml(id, match = false) {
@@ -93,6 +96,7 @@ function paint(ctx, legal = []) {
     $h.setAttribute('aria-label', `${i < 7 ? 'Your house' : "Lola's house"} ${slotName(i)}, ${burnt ? 'burnt' : `${n} shell${n === 1 ? '' : 's'}`}${d ? `, ${d} from your ulo` : ''}`);
     if (i < 7) { const ok = legal.includes(i); $h.setAttribute('aria-disabled', String(!ok)); $h.tabIndex = ok ? 0 : -1; }
   });
+  if (main3d(ctx)) view3d.setLegal(legal);
   if (ctx.match) { const sc = document.getElementById('score'); if (sc) { sc.innerHTML = `<span><b>${ctx.s[ULO]}</b>ikaw</span><i>vs</i><span><b>${ctx.s[LOLA_ULO]}</b>Lola</span>`; sc.setAttribute('aria-label', `You ${ctx.s[ULO]}, Lola ${ctx.s[LOLA_ULO]}`); } }
 }
 
@@ -121,13 +125,41 @@ const rowOf = (slot) => (slot <= 6 ? 'you' : slot >= 8 && slot <= 14 ? 'lola' : 
 function flash(ctx, slot, kf, ms) { const el = ctx.$b.querySelector(`[data-slot="${slot}"]`); return el ? el.animate(kf, { duration: ms, easing: 'ease-out' }).finished : Promise.resolve(); }
 function showRings(ctx, slots, whole) {
   clearRings(ctx);
+  if (main3d(ctx)) view3d.setTargets(slots, whole);
   const size = houseW(ctx) + 10;
   slots.forEach((slot, k) => { const el = fxEl(ctx, `ring${whole ? ' ws' : ''}`, whole ? `<b>${k + 1}</b>` : '', center(ctx, slot)); el.style.setProperty('--d', `${size}px`); });
 }
-const clearRings = (ctx) => ctx.$b.querySelectorAll('.fx .ring').forEach((el) => el.remove());
+const clearRings = (ctx) => { if (main3d(ctx)) view3d.setTargets([]); ctx.$b.querySelectorAll('.fx .ring').forEach((el) => el.remove()); };
 
 let active = null; // the ctx currently animating, so a tap can speed it up
+// On the 3D board: the same events, played by the view shell by shell; the page's own board (hidden, for
+// screen readers and keys) is painted as they go.
+async function animate3d(ctx, events) {
+  await boardSync;
+  const fast = instant(), who = ctx.lola ? 'lola' : 'you';
+  let drops = 0;
+  ctx.speed = ctx.base || 1; active = ctx;
+  for (const e of events) {
+    if (!ctx.$b.isConnected) return false;
+    if (e.t === 'drop') drops++;
+    applyEvent(ctx.s, e);
+    if (!fast) await view3d.play(e, stepMs(e, drops) / ctx.speed, who, ctx.speed);
+    if (!ctx.$b.isConnected) return false;
+    paint(ctx);
+    if (e.t === 'capture' || e.t === 'sweep') onBig(e, who);
+  }
+  if (fast) await view3d.setBoard(Uint8Array.from(ctx.s), ctx.burnt); else await view3d.settle();
+  paint(ctx);
+  if (active === ctx) active = null;
+  return ctx.$b.isConnected;
+}
+function onBig(e, who) {
+  if (e.n >= 8) toast(e.t === 'sweep' ? 'SAPOL!' : who === 'lola' ? 'KINUHA NI LOLA!' : 'HULI!', `+${e.n} sa ulo ${who === 'lola' ? 'ni Lola' : 'mo'}`, who === 'lola' ? 'hers' : '');
+  announce(`${who === 'lola' ? 'Lola' : 'You'} ${e.t === 'sweep' ? 'swept' : 'captured'} ${e.n}.`);
+}
+
 async function animate(ctx, events) {
+  if (main3d(ctx)) return animate3d(ctx, events);
   const fast = reduced();
   let hand = null, pos = null, inHand = 0, drops = 0;
   ctx.speed = ctx.base || 1; active = ctx;
@@ -227,6 +259,7 @@ function header() {
     <button type="button" class="small" data-act="stats">Stats</button>
     <button type="button" class="small" data-act="archive">Nakaraan</button>
     <button type="button" class="small" data-act="mute" aria-label="Sound">${data.muted ? '🔇' : '🔊'}</button>
+    <button type="button" class="small menu" data-act="menu" aria-label="Menu">❚❚</button>
   </nav>`;
 }
 
@@ -240,18 +273,19 @@ function marks() {
 }
 
 function render() {
-  $app.innerHTML = `${modeTabs('daily')}${header()}
-  <div class="lola"><div class="lola-face" aria-hidden="true">👵</div><p class="lola-bubble"><span id="lola-line"></span></p></div>
-  <div class="meta">${marks()}<span class="spacer"></span><span id="mode" class="badge${rec.whisper ? ' ws' : ''}">${rec.whisper ? 'Bulong ni Lola: buong sowing' : 'Preview: unang dakot'}</span></div>
+  $app.innerHTML = `<div class="hudtop">${modeTabs('daily')}${header()}
+  <div class="lola"><div class="lola-face" aria-hidden="true">👵</div><p class="lola-bubble"><span class="who" aria-hidden="true">Lola Iska</span><span id="lola-line"></span></p></div></div>
   ${boardHtml('b')}
+  <div class="dock"><div class="meta">${marks()}<span class="spacer"></span><span id="mode" class="badge${rec.whisper ? ' ws' : ''}">${rec.whisper ? 'Bulong ni Lola: buong sowing' : 'Preview: unang dakot'}</span></div>
   <p class="caption" id="caption"></p>
-  <div class="panel" id="panel"></div>
+  <div class="panel" id="panel"></div></div>
   <p class="hint">Tap a house to see where its first handful lands, then tap again to sow. Tap during a sowing to speed it up. Keys 1–7 pick Y0–Y6.</p>`;
   ui.$b = $('#b');
   refresh();
+  sync3d(ui);
   if (rec.done) { finished(); return; }
   lolaSays(rec.tries.length ? say('miss') : say('hello'));
-  if (!data.seenRules && !TEST) help();
+  if (!data.seenRules && !TEST && !screen) help();
 }
 
 const legalNow = () => (!ui || ui.busy || rec.done ? [] : legalHouses(ui.s, ui.burnt));
@@ -259,6 +293,7 @@ const legalNow = () => (!ui || ui.busy || rec.done ? [] : legalHouses(ui.s, ui.b
 function refresh() {
   paint(ui, legalNow());
   ui.$b.querySelectorAll('.h.mine').forEach(($h) => $h.classList.toggle('sel', Number($h.dataset.slot) === ui.selected));
+  if (main3d(ui)) view3d.setSelected(ui.selected);
   const $p = $('#panel');
   if (rec.done) return;
   const whisperBtn = rec.tries.length && !rec.whisper ? '<button type="button" class="ghost" data-act="whisper">👵 Bulong ni Lola</button>' : '';
@@ -303,7 +338,8 @@ async function playMove(h) {
   data.records[puzzle.iso] = rec;
   save();
   ui.busy = false;
-  if (score >= puzzle.par) { sound.par(); celebrate(); }
+  if (score >= puzzle.par) { sound.par(); celebrate(); toast('PAR!', `${score} sa ulo mo · pinakamagandang tira`); if (view3d) { view3d.punch(ULO, 0.8, 1.6); view3d.flash(0.3); } }
+  else toast(`${score}`, `par ${puzzle.par}`, 'hers');
   if (rec.done) { await wait(reduced() ? 0 : 700); finished(); return; }
   caption(`Tapos ang tira: ${score} of par ${puzzle.par}.`);
   lolaSays(say('miss'));
@@ -359,14 +395,15 @@ async function replay() {
   const { s, burnt } = toState(puzzle);
   const ctx = { $b: ui.$b, s, burnt, speed: 1, quiet: false, lola: true };
   paint(ctx);
+  await sync3d(ctx);
   lolaSays('Panoorin mo, apo. Ganito ang tira ni Lola.');
   caption(`Perfect line: ${puzzle.easiest.map(slotName).join(' → ')}${puzzle.perfectLines > 1 ? ` (1 of ${puzzle.perfectLines})` : ''}`);
   for (const h of puzzle.easiest) {
     if (me !== run || !ctx.$b.isConnected) return;
     const $h = ctx.$b.querySelector(`[data-slot="${h}"]`);
-    $h.classList.add('sel');
+    $h.classList.add('sel'); if (main3d(ctx)) view3d.setSelected(h);
     await wait(reduced() ? 0 : 600);
-    $h.classList.remove('sel');
+    $h.classList.remove('sel'); if (main3d(ctx)) view3d.setSelected(null);
     if (!(await animate(ctx, sowEvents(ctx.s, burnt, h).events))) return;
   }
   await animate(ctx, turnEndEvents(ctx.s, burnt).events);
@@ -475,6 +512,8 @@ const prefs = (() => {
     record: p.record && typeof p.record === 'object' ? p.record : {},
     seenRules: !!p.seenRules,
     saved: p.saved || null,
+    // the look and sound: graphics (auto or a level), music and effects volume, calm camera, counts by the holes
+    opt: { gfx: 'auto', music: 0.6, sfx: 1, calm: false, labels: true, ...(p.opt && typeof p.opt === 'object' ? p.opt : {}) },
   };
 })();
 const savePrefs = () => mstore.set(prefs);
@@ -518,12 +557,12 @@ function openMatch(fresh = false) {
   if (match.phase === 'roundOver') { roundOver(); return; }
   if (match.turn === 'lola') { lolaTurn(); return; }
   lolaSays(match.round === 1 && !match.rounds.length && match.s[ULO] === 0 ? sayM('hello') : sayM('yourTurn'));
-  if (!prefs.seenRules && !TEST) matchHelp();
+  if (!prefs.seenRules && !TEST && !screen) matchHelp();
 }
 
 function renderMatch() {
   const m = match;
-  $app.innerHTML = `${modeTabs('match')}
+  $app.innerHTML = `<div class="hudtop">${modeTabs('match')}
   <header class="top">
     <div><div class="kicker">Laban kay Lola Iska · ${esc(LEVEL_NAME[m.level])} · Round ${m.round}${m.limit ? ` of ${m.limit}` : ''}</div><h1>Sungka</h1></div>
     <div class="score" role="img" id="score"></div>
@@ -533,15 +572,18 @@ function renderMatch() {
     <button type="button" class="small" data-act="m-new">Bagong laro</button>
     <button type="button" class="small" data-act="speed" aria-label="Animation speed">Bilis ${prefs.speed}×</button>
     <button type="button" class="small" data-act="mute" aria-label="Sound">${data.muted ? '🔇' : '🔊'}</button>
+    <button type="button" class="small menu" data-act="menu" aria-label="Menu">❚❚</button>
   </nav>
-  <div class="lola"><div class="lola-face" aria-hidden="true">👵</div><p class="lola-bubble"><span id="lola-line"></span></p></div>
-  <p class="turn" id="turn" aria-live="polite"></p>
+  <div class="lola"><div class="lola-face" aria-hidden="true">👵</div><p class="lola-bubble"><span class="who" aria-hidden="true">Lola Iska</span><span id="lola-line"></span></p></div>
+  <p class="turn" id="turn" aria-live="polite"></p></div>
   ${boardHtml('b', true)}
-  <p class="caption" id="caption"></p>
-  <div class="panel" id="panel"></div>
+  <div class="dock"><p class="caption" id="caption"></p>
+  <div class="panel" id="panel"></div></div>
   <p class="hint">Tap one of your houses (the bottom row) to see where its first handful lands, then tap again to sow. Tap during a sowing to speed it up. Keys 1–7 pick Y0–Y6.</p>`;
   mui.$b = $('#b');
   refreshMatch();
+  sync3d(mui);
+  if (view3d && view3d.mode !== 'title') view3d.setMode('play');
 }
 
 function refreshMatch() {
@@ -549,6 +591,7 @@ function refreshMatch() {
   const mine = yourMove() ? legalFor(match, 'you') : [];
   paint(mui, mine);
   mui.$b.querySelectorAll('.h.mine').forEach(($h) => $h.classList.toggle('sel', Number($h.dataset.slot) === mui.selected));
+  if (main3d(mui)) view3d.setSelected(mui.selected);
   const playing = match.phase === 'play';
   mui.$b.classList.toggle('lola-turn', playing && match.turn === 'lola');
   mui.$b.classList.toggle('your-turn', playing && match.turn === 'you');
@@ -590,6 +633,7 @@ async function matchSow(h) {
 async function lolaTurn() {
   const me = mrun;
   let took = false;
+  turnToast('lola');
   while (me === mrun && match.phase === 'play' && match.turn === 'lola') {
     mui.busy = true; refreshMatch();
     lolaSays(sayM('think'));
@@ -597,10 +641,11 @@ async function lolaTurn() {
     if (me !== mrun) return;
     const h = lolaMove(match, match.level);
     const $h = mui.$b.querySelector(`[data-slot="${h + 8}"]`);
-    $h.classList.add('sel');
+    $h.classList.add('sel'); if (view3d) view3d.setSelected(h + 8);
     caption(`Si Lola: ${slotName(h + 8)} (${mui.s[h + 8]})`);
+    announce(`Lola sows ${slotName(h + 8)}, ${mui.s[h + 8]} shells.`);
     await wait(reduced() ? 0 : 600 / prefs.speed);
-    $h.classList.remove('sel');
+    $h.classList.remove('sel'); if (view3d) view3d.setSelected(null);
     if (me !== mrun) return;
     const r = playSowing(match, h);
     saveMatch();
@@ -618,6 +663,7 @@ async function lolaTurn() {
   mui.busy = false;
   caption('');
   if (!took) lolaSays(sayM('yourTurn'));
+  turnToast('you');
   refreshMatch();
   mui.$b.querySelector(`[data-slot="${legalFor(match, 'you')[0]}"]`)?.focus({ preventScroll: true });
 }
@@ -625,6 +671,8 @@ async function lolaTurn() {
 function roundOver() {
   refreshMatch();
   caption('');
+  if (view3d) view3d.setMode(match.phase === 'over' ? 'over' : 'round');
+  if (match.phase !== 'over') { const l = match.rounds[match.rounds.length - 1]; audio.event('round'); toast(`ROUND ${l.round}`, l.winner === 'you' ? 'Sa iyo ang round!' : l.winner === 'lola' ? 'Kay Lola ang round' : 'Tabla', l.winner === 'lola' ? 'hers' : ''); }
   if (match.phase === 'over') { matchOver(); return; }
   const last = match.rounds[match.rounds.length - 1];
   lolaSays(last.winner === 'you' ? sayM('roundWon') : last.winner === 'lola' ? sayM('roundLost') : sayM('roundTie'));
@@ -646,7 +694,8 @@ function matchOver() {
   const rec = prefs.record[match.level] || { w: 0, l: 0, d: 0 };
   if (!match.recorded) { rec[w === 'you' ? 'w' : w === 'lola' ? 'l' : 'd']++; prefs.record[match.level] = rec; match.recorded = true; }
   saveMatch();
-  if (w === 'you') { sound.par(); celebrate(mui); }
+  if (w === 'you') { sound.par(); celebrate(mui); } else audio.event('lost');
+  toast(w === 'you' ? 'PANALO KA!' : w === 'lola' ? 'PANALO SI LOLA' : 'TABLA!', `${match.s[ULO]} – ${match.s[LOLA_ULO]}`, w === 'lola' ? 'hers' : '');
   lolaSays(w === 'you' ? sayM('won') : w === 'lola' ? sayM('lost') : sayM('tie'));
   const rows = match.rounds.map((r) => `<li>Round ${r.round}: ikaw ${r.you} · Lola ${r.lola}</li>`).join('');
   const how = match.limit ? '' : '<p class="fine">Hindi na makapuno ng kahit isang bahay ang natalo.</p>';
@@ -709,7 +758,7 @@ document.addEventListener('click', (ev) => {
     case 'help': help(); break;
     case 'stats': showStats(); break;
     case 'archive': archive(); break;
-    case 'mute': data.muted = !data.muted; save(); t.textContent = data.muted ? '🔇' : '🔊'; break;
+    case 'mute': data.muted = !data.muted; save(); audio.setMuted(data.muted); document.querySelectorAll('[data-act="mute"]').forEach((b) => { b.textContent = data.muted ? '🔇' : '🔊'; }); if (!data.muted) sound.ensure(); break;
     case 'close': run++; $('#dlg').close(); break;
     case 'play-day': $('#dlg').close(); open(t.dataset.iso); break;
     case 'mode-match': if (!mui) openMatch(); break;
@@ -722,6 +771,16 @@ document.addEventListener('click', (ev) => {
     case 'm-start': run++; $('#dlg').close(); match = freshMatch(); openMatch(); break;
     case 'pick-level': prefs.level = t.dataset.v; savePrefs(); t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); $('#level-note').textContent = LEVEL_NOTE[prefs.level]; break;
     case 'pick-rounds': prefs.rounds = Number(t.dataset.v) || null; savePrefs(); t.parentElement.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); break;
+    case 't-match': startGame('match'); break;
+    case 't-daily': startGame('daily'); break;
+    case 't-help': matchHelp(); break;
+    case 'menu': showScreen('pause'); break;
+    case 'resume': showScreen(null); break;
+    case 'p-match': showScreen(null); if (!mui) openMatch(); break;
+    case 'p-daily': showScreen(null); if (!ui) open(today()); break;
+    case 'p-title': showScreen('title'); break;
+    case 'settings': openSettings(); break;
+    case 'settings-ok': showScreen(settingsFrom); break;
     case 'speed': prefs.speed = SPEEDS[(SPEEDS.indexOf(prefs.speed) + 1) % SPEEDS.length]; savePrefs(); if (mui) mui.base = prefs.speed; t.textContent = `Bilis ${prefs.speed}×`; break;
     default: break;
   }
@@ -731,12 +790,126 @@ document.addEventListener('keydown', (ev) => {
   if (ev.repeat && /^([1-7]|Enter| )$/.test(ev.key)) { ev.preventDefault(); return; }
   if (active && (ev.key === ' ' || ev.key === 'Enter')) active.speed = 4;
   if (ev.ctrlKey || ev.metaKey || ev.altKey || $('#dlg').open) return;
+  if (ev.key === 'Escape') { if (screen === 'pause' || screen === 'settings') showScreen(screen === 'settings' ? settingsFrom : null); else if (!screen) showScreen('pause'); return; }
+  if (screen) return;
+  if ((ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') && document.activeElement && document.activeElement.matches('#b .h.mine')) {
+    ev.preventDefault(); const mine = [...document.querySelectorAll('#b .h.mine')], i = mine.indexOf(document.activeElement);
+    mine[(i + (ev.key === 'ArrowRight' ? 1 : mine.length - 1)) % mine.length].focus({ preventScroll: true });
+  }
   if (/^[1-7]$/.test(ev.key) && ui && !ui.busy && !rec.done) { ev.preventDefault(); const h = Number(ev.key) - 1; ui.$b.querySelector(`[data-slot="${h}"]`).focus({ preventScroll: true }); select(h); }
   else if (/^[1-7]$/.test(ev.key) && !ui && yourMove()) { ev.preventDefault(); const h = Number(ev.key) - 1; mui.$b.querySelector(`[data-slot="${h}"]`).focus({ preventScroll: true }); matchSelect(h); }
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && puzzle && ui && rec.daily && puzzle.iso !== today() && !ui.busy) open(today()); });
 
+// ---------- the front end: title, menu, settings, toasts, and the 3D board's own input ----------
+let screen = null, settingsFrom = null;
+const touch = matchMedia('(pointer: coarse)').matches;
+function showScreen(name) {
+  screen = name;
+  for (const id of ['title', 'pause', 'settings']) $(`#${id}`).hidden = id !== name;
+  document.body.classList.toggle('titled', name === 'title');
+  document.body.classList.toggle('menu-open', !!name);
+  if (name) { $('#toast').hidden = true; }
+  $('#app').inert = !!name;
+  if (view3d) view3d.setMode(name === 'title' ? 'title' : match && mui && match.phase === 'over' ? 'over' : match && mui && match.phase === 'roundOver' ? 'round' : 'play');
+  const first = name && ($(`#${name}`).querySelector('button.primary') || $(`#${name}`).querySelector('button'));
+  if (first) first.focus({ preventScroll: true });
+  if (name === 'title') { const t = today(), p = puzzleFor(t); $('#t-daily').textContent = `📅 Isang Tira #${p.number} · ${TIERS[p.tier].name}`; }
+}
+function startGame(which) {
+  sound.ensure();
+  showScreen(null);
+  if (which === 'daily') { if (!ui) open(today()); else if (view3d) view3d.setMode('play'); if (!data.seenRules && !TEST) help(); }
+  else { if (!mui) openMatch(); else if (view3d) view3d.setMode('play'); if (!prefs.seenRules && !TEST) matchHelp(); }
+}
+let toastT = 0;
+function toast(big, small = '', cls = '') {
+  const el = $('#toast');
+  if (screen || !el) return;
+  el.className = cls; el.innerHTML = `<b>${esc(big)}</b>${small ? `<span>${esc(small)}</span>` : ''}`; el.hidden = false;
+  if (!reduced()) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
+  clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 1700);
+}
+let lastTurn = null;
+function turnToast(who) {
+  if (who === lastTurn || !match || match.phase !== 'play') return;
+  lastTurn = who;
+  audio.event('turn', { who });
+  if (view3d) toast(who === 'lola' ? 'TIRA NI LOLA' : 'IKAW NA', who === 'lola' ? 'Panoorin ang sigay...' : 'Pumili ng bahay', who === 'lola' ? 'hers turn' : 'turn');
+}
+function openSettings() {
+  if (screen !== 'settings') settingsFrom = screen;
+  const o = prefs.opt, f = document.activeElement, again = f && f.dataset && f.dataset.k ? `[data-k="${f.dataset.k}"][data-v="${f.dataset.v}"]` : null;
+  const seg = (key, list, cur) => `<div class="modes">${list.map(([v, label]) => `<button type="button" data-k="${key}" data-v="${v}" aria-pressed="${String(cur) === String(v)}">${label}</button>`).join('')}</div>`;
+  const slider = (key, label) => `<label class="slide">${label} <input type="range" min="0" max="1" step="0.05" value="${o[key]}" data-k="${key}"></label>`;
+  $('#settings-body').innerHTML = `
+    <div class="grp"><h3>Laro · Game</h3>
+    <p class="muted">Bilis ng sabog · Sowing speed</p>${seg('speed', [[1, '1×'], [2, '2×'], [3, '3×']], prefs.speed)}
+    <p class="muted">Bilang sa bawat butas · Counts by each house</p>${seg('labels', [[true, 'Oo · On'], [false, 'Hindi · Off']], o.labels)}
+    </div><div class="grp"><h3>Tunog at itsura · Sound and look</h3>
+    ${slider('music', 'Musika · Music')}${slider('sfx', 'Tunog · Effects')}
+    <p class="muted">Graphics</p>${seg('gfx', [['auto', 'Auto'], [2, 'Mataas'], [1, 'Katamtaman'], [0, 'Mababa']], o.gfx)}
+    <p class="muted">Kamera · Camera</p>${seg('calm', [[false, 'Sine · Cinematic'], [true, 'Kalmado · Calm']], o.calm)}
+    ${matchMedia('(prefers-reduced-motion: reduce)').matches ? '<p class="muted">Your device asks for reduced motion, so the camera stays calm.</p>' : ''}</div>`;
+  for (const b of $('#settings-body').querySelectorAll('button')) b.onclick = () => {
+    const k = b.dataset.k, raw = b.dataset.v, v = raw === 'true' ? true : raw === 'false' ? false : isNaN(+raw) ? raw : +raw;
+    if (k === 'speed') { prefs.speed = v; if (mui) mui.base = v; document.querySelectorAll('[data-act="speed"]').forEach((x) => { x.textContent = `Bilis ${v}×`; }); }
+    else { o[k] = v; if (view3d) { if (k === 'gfx') view3d.gfx(v); if (k === 'calm') view3d.setCalm(calm()); if (k === 'labels') view3d.setLabels(v); } }
+    savePrefs(); audio.ui('tick'); openSettings();
+  };
+  for (const r of $('#settings-body').querySelectorAll('input[type=range]')) r.oninput = () => { o[r.dataset.k] = +r.value; audio.start(); audio.setMix(o); savePrefs(); };
+  screen = 'settings'; showScreen('settings');
+  if (again && $('#settings-body').querySelector(again)) $('#settings-body').querySelector(again).focus({ preventScroll: true });
+}
+audio.setMix(prefs.opt);
+
+// tapping the 3D board: the house under your finger is the same as its button
+function wire3d() {
+  const cv = $('#view');
+  cv.addEventListener('click', (ev) => {
+    if (screen || $('#dlg').open) return;
+    const slot = view3d.pickAt(ev.clientX, ev.clientY);
+    const btn = slot >= 0 && slot <= 6 && document.querySelector(`#b [data-slot="${slot}"]`);
+    if (btn) btn.click();
+  });
+  cv.addEventListener('pointermove', (ev) => {
+    if (ev.pointerType !== 'mouse') return;
+    const slot = view3d.pickAt(ev.clientX, ev.clientY), ok = slot >= 0 && slot <= 6;
+    view3d.setHover(ok ? slot : null);
+    cv.style.cursor = ok && document.querySelector(`#b [data-slot="${slot}"]`)?.getAttribute('aria-disabled') === 'false' ? 'pointer' : '';
+  });
+  document.addEventListener('focusin', (ev) => { const t = ev.target; if (t.matches && t.matches('#b .h.mine')) view3d.setFocus(t.matches(':focus-visible') ? Number(t.dataset.slot) : null); });
+  document.addEventListener('focusout', (ev) => { if (ev.target.matches && ev.target.matches('#b .h.mine')) view3d.setFocus(null); });
+  new ResizeObserver(() => view3d.resize()).observe(cv);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) audio.setMusic(false); else if (audio.started) audio.setMusic(true); });
+}
+
+async function boot3d() {
+  if (Q.get('gl') === '0') return false;
+  const bar = $('#loading'), pct = $('#load-pct');
+  const loaded = (f) => { bar.hidden = false; pct.textContent = `${Math.round(f * 100)}%`; bar.style.setProperty('--p', `${Math.round(f * 100)}%`); };
+  loaded(0.05);
+  try {
+    const { createView } = await import('./view3d.mjs');
+    view3d = await createView({ canvas: $('#view'), overlay: $('#overlay'), gfx: Q.get('gfx') ?? (prefs.opt.gfx === 'auto' ? null : String(prefs.opt.gfx)), low: touch, test: TEST, onProgress: loaded });
+  } catch (e) {
+    console.warn('3D board unavailable, using the flat one:', e && e.message);
+    view3d = null; bar.hidden = true; return false;
+  }
+  document.body.classList.add('gl');
+  view3d.setSfx((k, info) => audio.event(k, info));
+  view3d.setCalm(calm()); view3d.setLabels(prefs.opt.labels);
+  wire3d();
+  loaded(1); bar.classList.add('done'); setTimeout(() => { bar.hidden = true; }, 700);
+  return true;
+}
+
+const showTitle = !TEST || Q.get('title') === '1';
+if (showTitle) showScreen('title');
+await boot3d();
+if (view3d) view3d.setMode(screen === 'title' ? 'title' : 'play');
 if (TEST ? Q.get('mode') === 'daily' : prefs.mode === 'daily') open(today()); else openMatch();
+if (screen === 'title' && view3d) view3d.setMode('title');
 if ('serviceWorker' in navigator && !TEST) navigator.serviceWorker.register('sw.js').catch(() => { /* online-only then */ });
 
 if (TEST) {
@@ -747,6 +920,8 @@ if (TEST) {
     again, replay, open,
     get match() { return match; }, get mui() { return mui; }, openMatch,
     async sow(h) { matchSelect(h); await matchSow(h); },
+    get view() { return view3d; }, get screen() { return screen; }, showScreen, startGame, openSettings,
+    sync: () => boardSync,
   };
   if (Q.get('level')) prefs.level = Q.get('level');
 }

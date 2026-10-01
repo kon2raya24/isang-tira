@@ -10,19 +10,49 @@
 <meta property="og:image" content="https://isang-tira.vercel.app/og.jpg">
 <meta property="og:url" content="https://isang-tira.vercel.app/">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="theme-color" content="#b07a45">
+<meta name="theme-color" content="#1b120c">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Isang Tira">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Barlow+Condensed:ital,wght@0,700;0,800;1,800;1,900&family=Lora:ital,wght@1,500;1,600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="stage" id="stage">
+  <canvas id="view" aria-label="Lola Iska's sala on a sunny afternoon: a carved sungka board with cowrie shells on a wooden table by a capiz window"></canvas>
+  <div id="overlay" aria-hidden="true"></div>
+</div>
+<div id="loading" hidden>Inaayos ni Lola ang sungkaan · <span id="load-pct">0%</span><i></i></div>
 <main id="app" class="app"></main>
+<div id="toast" aria-hidden="true" hidden></div>
+<section class="screen" id="title" hidden>
+  <h1 class="logo">ISANG TIRA</h1><p class="sub">sungka kay Lola Iska</p>
+  <p class="tag">Maupo ka, apo. Magsasalit tayo ng tira: sigay sa bahay-bahay, hanggang maubos. O subukan ang iisang tira ng araw na ito.</p>
+  <div class="row big">
+    <button type="button" class="primary" data-act="t-match">🐚 Laban kay Lola</button>
+    <button type="button" data-act="t-daily" id="t-daily">📅 Isang Tira ng Araw</button>
+  </div>
+  <div class="row">
+    <button type="button" data-act="t-help">Paano laruin</button>
+    <button type="button" data-act="settings">Ayos · Settings</button>
+    <button type="button" class="sound" data-act="mute" aria-label="Sound">🔊</button>
+  </div>
+  <p class="muted" id="title-note"></p>
+</section>
+<section class="screen" id="pause" hidden>
+  <h2>Hinto · Paused</h2>
+  <div class="row"><button type="button" class="primary" data-act="resume">Tuloy · Resume</button></div>
+  <div class="row"><button type="button" data-act="p-match">🐚 Laban kay Lola</button><button type="button" data-act="p-daily">📅 Isang Tira ng Araw</button></div>
+  <div class="row"><button type="button" data-act="settings">Ayos · Settings</button><button type="button" data-act="p-title">Menu</button></div>
+</section>
+<section class="screen" id="settings" hidden><h2>Ayos · Settings</h2><div class="card" id="settings-body"></div><div class="row"><button type="button" class="primary" data-act="settings-ok">Tapos · Done</button></div></section>
 <div id="live" class="sr-only" aria-live="polite"></div>
 <dialog id="dlg" aria-label="Isang Tira"></dialog>
-<footer>Sungka against Lola, and a daily puzzle, by <a href="https://kon2raya.netlify.app" target="_blank" rel="noopener">Lemmuel Turaya</a> · <a href="https://tambayan-arcade.vercel.app/">More games</a> · <a href="https://tambayan-arcade.vercel.app/#support">☕ Support</a></footer>
+<footer id="credit">Sungka against Lola, and a daily puzzle, by <a href="https://kon2raya.netlify.app" target="_blank" rel="noopener">Lemmuel Turaya</a> · <a href="https://tambayan-arcade.vercel.app/">More games</a> · <a href="https://tambayan-arcade.vercel.app/#support">☕ Support</a></footer>
 <noscript><p style="padding:16px">Isang Tira needs JavaScript to set up the board.</p></noscript>
 <script type="module" src="src/app.mjs"></script>
 </body>
