@@ -58,10 +58,10 @@ export async function createView({ canvas, overlay, gfx = null, low = false, onP
   sun.position.copy(sun.target.position).addScaledVector(sunDir, -5);
   scene.add(sun, sun.target);
   // the rest of the window's light: soft, from behind Lola
-  const windowFill = new THREE.DirectionalLight('#ffe4c4', 0.9);
+  const windowFill = new THREE.DirectionalLight('#ffe4c4', 0.5);
   windowFill.position.set(0.2, 1.2, -1.4); windowFill.target.position.set(0, 0, 0.3);
   scene.add(windowFill, windowFill.target);
-  const lamp = new THREE.SpotLight('#ffcf93', 6, 3.2, 0.6, 0.85, 2);
+  const lamp = new THREE.SpotLight('#ffcf93', 4.6, 3.2, 0.6, 0.85, 2);
   lamp.position.set(0, 1.3, 0.05); lamp.target.position.set(0, 0, 0);
   lamp.castShadow = true; lamp.shadow.mapSize.set(low ? 512 : 1024, low ? 512 : 1024); lamp.shadow.bias = -0.00025; lamp.shadow.normalBias = 0.004; lamp.shadow.radius = 3;
   lamp.shadow.camera.near = 0.3; lamp.shadow.camera.far = 2.2;
@@ -74,7 +74,7 @@ export async function createView({ canvas, overlay, gfx = null, low = false, onP
   const shafts = new THREE.Group();
   const shaftMat = new THREE.MeshBasicMaterial({ map: shaftTex, color: new THREE.Color(1.0, 0.86, 0.62), transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
   for (let k = 0; k < 4; k++) {
-    const len = 3.2, w = 0.5 + k * 0.08;
+    const len = 1.6, w = 0.45 + k * 0.08; // they fade out before they reach the table, so they never wash over the board
     const g = new THREE.PlaneGeometry(w, len); g.translate(0, -len / 2, 0);
     const m = new THREE.Mesh(g, shaftMat);
     const o = new THREE.Object3D();
@@ -317,7 +317,7 @@ export async function createView({ canvas, overlay, gfx = null, low = false, onP
   const portrait = () => W / H < 0.85;
   // your seat: the whole board in view, a little tilted toward you; on a tall phone the board runs up the screen
   // Fit the board (with room for its labels) inside the frame, leaving the top and bottom for the HUD.
-  const fitCam = new THREE.PerspectiveCamera(), FIT = [[-0.5, -0.1], [0.5, -0.1], [-0.5, 0.1], [0.5, 0.1], [0, -0.1], [0, 0.1]].map(([x, z]) => new THREE.Vector3(x, BOARD_TOP, z));
+  const fitCam = new THREE.PerspectiveCamera(), FIT = [[-0.485, -0.1], [0.485, -0.1], [-0.485, 0.1], [0.485, 0.1], [0, -0.1], [0, 0.1]].map(([x, z]) => new THREE.Vector3(x, BOARD_TOP, z));
   function fitDistance(look, dir, fov, box) {
     fitCam.fov = fov; fitCam.aspect = W / H; fitCam.updateProjectionMatrix();
     let lo = 0.25, hi = 4;
@@ -338,9 +338,9 @@ export async function createView({ canvas, overlay, gfx = null, low = false, onP
       const P = 1.12; dirTmp.set(-Math.cos(P), Math.sin(P), 0.0);
       out.pos.copy(out.look).addScaledVector(dirTmp, fitDistance(out.look, dirTmp, out.fov, [0.86, -0.8, 0.72]));
     } else {
-      out.look.set(0, 0, -0.03); out.fov = 36;
-      const P = 0.86, Y = 0.07; dirTmp.set(Math.sin(Y) * Math.cos(P), Math.sin(P), Math.cos(Y) * Math.cos(P));
-      out.pos.copy(out.look).addScaledVector(dirTmp, fitDistance(out.look, dirTmp, out.fov, [0.94, -0.6, 0.5]));
+      out.look.set(0, 0, -0.02); out.fov = 30;
+      const P = 0.8, Y = 0.06; dirTmp.set(Math.sin(Y) * Math.cos(P), Math.sin(P), Math.cos(Y) * Math.cos(P));
+      out.pos.copy(out.look).addScaledVector(dirTmp, fitDistance(out.look, dirTmp, out.fov, [0.97, -0.62, 0.55]));
     }
     return out;
   }
@@ -611,6 +611,8 @@ export async function createView({ canvas, overlay, gfx = null, low = false, onP
     // embers breathe in burnt houses
     scorchMat.emissiveIntensity = 0.8 + Math.sin(t * 2.3) * 0.35 + Math.sin(t * 5.1) * 0.15;
     room.lamp.visible = mode === 'title' || !portrait() || mode === 'over';
+    // on a tall phone you look down the board's length: hang the light's hot spot past its near end
+    { const px = portrait() && mode !== 'title' && mode !== 'over' ? -0.6 : 0; lamp.position.x += (px - lamp.position.x) * Math.min(1, real * 4); lamp.target.position.x = px * 0.4; }
     room.update(t);
     stepParticles(dt);
     stepCamera(real, t);

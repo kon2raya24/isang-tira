@@ -36,7 +36,7 @@ export function sungkaMaterials(lib, { low = false } = {}) {
   const { diff, nor, arm } = lib.tex;
   const board = new THREE.MeshPhysicalMaterial({
     map: diff, normalMap: nor, normalScale: new THREE.Vector2(1, 1), roughnessMap: arm, metalnessMap: arm, aoMap: arm, aoMapIntensity: 1,
-    roughness: 0.78, metalness: 0, clearcoat: low ? 0 : 0.3, clearcoatRoughness: 0.4, sheen: 0, color: '#ffffff',
+    roughness: 0.82, metalness: 0, clearcoat: low ? 0 : 0.1, clearcoatRoughness: 0.6, sheen: 0, color: '#ffffff', specularIntensity: 0.35, envMapIntensity: 0.55,
   });
   const shell = new THREE.MeshPhysicalMaterial({
     map: diff, normalMap: nor, normalScale: new THREE.Vector2(0.7, 0.7), aoMap: arm, aoMapIntensity: 0.6,

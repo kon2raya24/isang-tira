@@ -1,6 +1,6 @@
 // Offline play: the game's own files (three.js, the board, the sala's scans and sounds) are cached on install and served cache-first; the webfont is
 // cached the first time it loads. Bump VERSION whenever a file changes so players get the update.
-const VERSION = 'isangtira-v3';
+const VERSION = 'isangtira-v4';
 const ASSETS = [
   './',
   'index.html',
